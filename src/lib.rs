@@ -99,13 +99,13 @@ impl Session {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn new_session() {
+    fn session_test() {
         let mut session = super::Session::new();
         let mut other_session = super::Session::from_id(session.get_id().to_string());
         other_session.set("on", "no");
         assert_eq!(session.get("on"), other_session.get("on"));
         assert_eq!(session.get("on").unwrap(), "no");
         assert_eq!(session.unset("on").get("on"), None);
-        //session.delete();
+        session.delete();
     }
 }
