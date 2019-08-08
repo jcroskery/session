@@ -16,10 +16,10 @@ fn new_conn() -> Conn {
     Conn::new(builder).unwrap()
 }
 
-fn garbage_collector(conn: &mut Conn) {
-    if rand::thread_rng().gen_range(0, 100) == 0 {
+fn garbage_collector(conn: &mut Conn, days: u32, prob: u32) {
+    if rand::thread_rng().gen_range(0, prob) == 0 {
         conn.prep_exec(
-            "DELETE FROM sessions WHERE timestamp < now() - INTERVAL 1 month",
+            format!("DELETE FROM sessions WHERE timestamp < now() - INTERVAL {} day", days),
             (),
         )
         .unwrap();
@@ -27,9 +27,9 @@ fn garbage_collector(conn: &mut Conn) {
 }
 
 impl Session {
-    pub fn new() -> Self {
+    pub fn new(days: u32, prob: u32) -> Self {
         let mut conn = new_conn();
-        garbage_collector(&mut conn);
+        garbage_collector(&mut conn, days, prob);
         let id = thread_rng().sample_iter(&Alphanumeric).take(255).collect();
         conn.prep_exec(
             "INSERT INTO sessions (timestamp, id, data) VALUES (now() + 0, :id, \"{}\")",
@@ -100,7 +100,7 @@ impl Session {
 mod tests {
     #[test]
     fn session_test() {
-        let mut session = super::Session::new();
+        let mut session = super::Session::new(30, 100);
         let mut other_session = super::Session::from_id(session.get_id().to_string());
         other_session.set("on", "no".to_string());
         assert_eq!(session.get("on"), other_session.get("on"));
