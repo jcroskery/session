@@ -62,7 +62,7 @@ impl Session {
             Err(_) => None,
         }
     }
-    pub fn set(&mut self, key: &str, value: &str) -> &mut Self {
+    pub fn set(&mut self, key: &str, value: String) -> &mut Self {
         self.conn
             .prep_exec(
                 format!(
@@ -102,7 +102,7 @@ mod tests {
     fn session_test() {
         let mut session = super::Session::new();
         let mut other_session = super::Session::from_id(session.get_id().to_string());
-        other_session.set("on", "no");
+        other_session.set("on", "no".to_string());
         assert_eq!(session.get("on"), other_session.get("on"));
         assert_eq!(session.get("on").unwrap(), "no");
         assert_eq!(session.unset("on").get("on"), None);
