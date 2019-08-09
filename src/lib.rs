@@ -19,7 +19,10 @@ fn new_conn() -> Conn {
 fn garbage_collector(conn: &mut Conn, days: u32, prob: u32) {
     if rand::thread_rng().gen_range(0, prob) == 0 {
         conn.prep_exec(
-            format!("DELETE FROM sessions WHERE timestamp < now() - INTERVAL {} day", days),
+            format!(
+                "DELETE FROM sessions WHERE timestamp < now() - INTERVAL {} day",
+                days
+            ),
             (),
         )
         .unwrap();
@@ -38,10 +41,22 @@ impl Session {
         .unwrap();
         Session { id, conn: conn }
     }
-    pub fn from_id(id: String) -> Self {
-        Session {
-            id,
-            conn: new_conn(),
+    pub fn from_id(id: &str) -> Option<Self> {
+        let mut conn = new_conn();
+        if from_value(
+            conn.prep_exec("SELECT EXISTS(SELECT * FROM sessions WHERE id = :id)", params!(id))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()[0]
+                .clone(),
+        ) {
+            Some(Session {
+                id: id.to_string(),
+                conn,
+            })
+        } else {
+            None
         }
     }
     pub fn get_id(&self) -> &str {
@@ -101,11 +116,15 @@ mod tests {
     #[test]
     fn session_test() {
         let mut session = super::Session::new(30, 100);
-        let mut other_session = super::Session::from_id(session.get_id().to_string());
+        let id = session.get_id().to_string();
+        let mut other_session = super::Session::from_id(&id).unwrap();
         other_session.set("on", "no".to_string());
         assert_eq!(session.get("on"), other_session.get("on"));
         assert_eq!(session.get("on").unwrap(), "no");
         assert_eq!(session.unset("on").get("on"), None);
         session.delete();
+        if let Some(_) = super::Session::from_id(&id) {
+            panic!("Delete failed!");
+        }
     }
 }
