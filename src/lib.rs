@@ -101,6 +101,14 @@ impl Session {
             .unwrap();
         self
     }
+    pub fn clear(&mut self) -> &mut Self {
+        self.conn
+            .prep_exec(
+                format!("UPDATE sessions SET data = \"\" WHERE id = :id"), 
+                params!("id" => &self.id)
+            ).unwrap();
+        self
+    }
     pub fn delete(&mut self) {
         self.conn
             .prep_exec(
