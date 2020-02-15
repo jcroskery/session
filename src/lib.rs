@@ -104,7 +104,7 @@ impl Session {
     pub fn clear(&mut self) -> &mut Self {
         self.conn
             .prep_exec(
-                format!("UPDATE sessions SET data = \"\" WHERE id = :id"), 
+                format!("UPDATE sessions SET data = JSON_ARRAY() WHERE id = :id"), 
                 params!("id" => &self.id)
             ).unwrap();
         self
@@ -130,6 +130,9 @@ mod tests {
         assert_eq!(session.get("on"), other_session.get("on"));
         assert_eq!(session.get("on").unwrap(), "no");
         assert_eq!(session.unset("on").get("on"), None);
+        session.set("no", "on".to_string());
+        session.clear();
+        assert_eq!(session.get("no"), None);
         session.delete();
         if let Some(_) = super::Session::from_id(&id) {
             panic!("Delete failed!");
