@@ -104,7 +104,7 @@ impl Session {
     pub fn clear(&mut self) -> &mut Self {
         self.conn
             .prep_exec(
-                format!("UPDATE sessions SET data = JSON_ARRAY() WHERE id = :id"), 
+                "UPDATE sessions SET data = JSON_OBJECT() WHERE id = :id", 
                 params!("id" => &self.id)
             ).unwrap();
         self
@@ -125,14 +125,14 @@ mod tests {
     fn session_test() {
         let mut session = super::Session::new(30, 100);
         let id = session.get_id().to_string();
+        session.set("no", "on".to_string());
+        session.clear();
+        assert_eq!(session.get("no"), None);
         let mut other_session = super::Session::from_id(&id).unwrap();
         other_session.set("on", "no".to_string());
         assert_eq!(session.get("on"), other_session.get("on"));
         assert_eq!(session.get("on").unwrap(), "no");
         assert_eq!(session.unset("on").get("on"), None);
-        session.set("no", "on".to_string());
-        session.clear();
-        assert_eq!(session.get("no"), None);
         session.delete();
         if let Some(_) = super::Session::from_id(&id) {
             panic!("Delete failed!");
