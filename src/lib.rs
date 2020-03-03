@@ -1,59 +1,55 @@
-use mysql::{from_value, params, Conn, OptsBuilder, Row};
+use mysql_async::prelude::Queryable;
+use mysql_async::{from_row, params, Conn, Pool};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 
+const URL: &str = "mysql://justus:@localhost:3306/olmmcc";
+
 pub struct Session {
     id: String,
-    conn: Conn,
+    pool: Pool,
 }
 
-fn new_conn() -> Conn {
-    let mut builder = OptsBuilder::new();
-    builder
-        .db_name(Some("olmmcc"))
-        .user(Some("justus"))
-        .pass(Some(""));
-    Conn::new(builder).unwrap()
-}
-
-fn garbage_collector(conn: &mut Conn, days: u32, prob: u32) {
+async fn garbage_collector(conn: Conn, days: u32, prob: u32) {
     if rand::thread_rng().gen_range(0, prob) == 0 {
-        conn.prep_exec(
-            format!(
-                "DELETE FROM sessions WHERE timestamp < now() - INTERVAL {} day",
-                days
-            ),
-            (),
-        )
-        .unwrap();
+        let query = format!(
+            "DELETE FROM sessions WHERE timestamp < now() - INTERVAL {} day",
+            days
+        );
+        conn.prep_exec(query, ()).await.unwrap();
     }
 }
 
 impl Session {
-    pub fn new(days: u32, prob: u32) -> Self {
-        let mut conn = new_conn();
-        garbage_collector(&mut conn, days, prob);
+    pub async fn new(days: u32, prob: u32) -> Self {
+        let pool = Pool::new(URL);
+        let garbage_conn = pool.get_conn().await.unwrap();
+        garbage_collector(garbage_conn, days, prob).await;
+        let conn = pool.get_conn().await.unwrap();
         let id = thread_rng().sample_iter(&Alphanumeric).take(255).collect();
         conn.prep_exec(
             "INSERT INTO sessions (timestamp, id, data) VALUES (now() + 0, :id, \"{}\")",
             params!("id" => &id),
         )
+        .await
         .unwrap();
-        Session { id, conn: conn }
+        Session { id, pool }
     }
-    pub fn from_id(id: &str) -> Option<Self> {
-        let mut conn = new_conn();
-        if from_value(
-            conn.prep_exec("SELECT EXISTS(SELECT * FROM sessions WHERE id = :id)", params!(id))
-                .unwrap()
-                .next()
-                .unwrap()
-                .unwrap()[0]
-                .clone(),
-        ) {
+    pub async fn from_id(id: &str) -> Option<Self> {
+        let pool = Pool::new(URL);
+        let conn = pool.get_conn().await.unwrap();
+        let result = conn
+            .prep_exec(
+                "SELECT EXISTS(SELECT * FROM sessions WHERE id = :id)",
+                params!(id),
+            )
+            .await
+            .unwrap();
+        let (_, collected_result) = result.collect::<bool>().await.unwrap();
+        if collected_result[0] {
             Some(Session {
                 id: id.to_string(),
-                conn,
+                pool,
             })
         } else {
             None
@@ -62,60 +58,63 @@ impl Session {
     pub fn get_id(&self) -> &str {
         &self.id
     }
-    pub fn get(&mut self, key: &str) -> Option<String> {
-        match self.conn.prep_exec(
-            format!(
-                "SELECT JSON_UNQUOTE(JSON_EXTRACT(data, '$.{}')) FROM sessions WHERE id = :id",
-                key
-            ),
-            params!("id" => &self.id),
-        ) {
+    pub async fn get(&mut self, key: &str) -> Option<String> {
+        let conn = self.pool.get_conn().await.unwrap();
+        let query = format!(
+            "SELECT JSON_UNQUOTE(JSON_EXTRACT(data, '$.{}')) FROM sessions WHERE id = :id",
+            key
+        );
+        match conn.prep_exec(query, params!("id" => &self.id)).await {
             Ok(t) => {
-                let row: Vec<Row> = t.take(1).map(|x| x.unwrap()).collect();
-                from_value(row[0][0].clone())
+                let (_, u) = t
+                    .map_and_drop(|i| from_row::<Option<String>>(i))
+                    .await
+                    .unwrap();
+                u[0].clone()
             }
-            Err(_) => None,
+            _ => None,
         }
     }
-    pub fn set(&mut self, key: &str, value: String) -> &mut Self {
-        self.conn
-            .prep_exec(
-                format!(
-                    "UPDATE sessions SET data = JSON_SET(`data`, '$.{}', :value) WHERE id = :id",
-                    key
-                ),
-                params!(value, "id" => &self.id),
-            )
+    pub async fn set(&mut self, key: &str, value: String) -> &mut Self {
+        let conn = self.pool.get_conn().await.unwrap();
+        let query = format!(
+            "UPDATE sessions SET data = JSON_SET(`data`, '$.{}', :value) WHERE id = :id",
+            key
+        );
+        conn.prep_exec(query, params!(value, "id" => &self.id))
+            .await
             .unwrap();
         self
     }
-    pub fn unset(&mut self, key: &str) -> &mut Self {
-        self.conn
-            .prep_exec(
-                format!(
-                    "UPDATE sessions SET data = JSON_REMOVE(`data`, '$.{}') WHERE id = :id",
-                    key
-                ),
-                params!("id" => &self.id),
-            )
+    pub async fn unset(&mut self, key: &str) -> &mut Self {
+        let conn = self.pool.get_conn().await.unwrap();
+        let query = format!(
+            "UPDATE sessions SET data = JSON_REMOVE(`data`, '$.{}') WHERE id = :id",
+            key
+        );
+        conn.prep_exec(query, params!("id" => &self.id))
+            .await
             .unwrap();
         self
     }
-    pub fn clear(&mut self) -> &mut Self {
-        self.conn
-            .prep_exec(
-                "UPDATE sessions SET data = JSON_OBJECT() WHERE id = :id", 
-                params!("id" => &self.id)
-            ).unwrap();
+    pub async fn clear(&mut self) -> &mut Self {
+        let conn = self.pool.get_conn().await.unwrap();
+        conn.prep_exec(
+            "UPDATE sessions SET data = JSON_OBJECT() WHERE id = :id",
+            params!("id" => &self.id),
+        )
+        .await
+        .unwrap();
         self
     }
-    pub fn delete(&mut self) {
-        self.conn
-            .prep_exec(
-                "DELETE FROM sessions WHERE id = :id",
-                params!("id" => &self.id),
-            )
-            .unwrap();
+    pub async fn delete(&mut self) {
+        let conn = self.pool.get_conn().await.unwrap();
+        conn.prep_exec(
+            "DELETE FROM sessions WHERE id = :id",
+            params!("id" => &self.id),
+        )
+        .await
+        .unwrap();
     }
 }
 
@@ -123,19 +122,22 @@ impl Session {
 mod tests {
     #[test]
     fn session_test() {
-        let mut session = super::Session::new(30, 100);
-        let id = session.get_id().to_string();
-        session.set("no", "on".to_string());
-        session.clear();
-        assert_eq!(session.get("no"), None);
-        let mut other_session = super::Session::from_id(&id).unwrap();
-        other_session.set("on", "no".to_string());
-        assert_eq!(session.get("on"), other_session.get("on"));
-        assert_eq!(session.get("on").unwrap(), "no");
-        assert_eq!(session.unset("on").get("on"), None);
-        session.delete();
-        if let Some(_) = super::Session::from_id(&id) {
-            panic!("Delete failed!");
-        }
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut session = super::Session::new(30, 100).await;
+            let id = session.get_id().to_string();
+            session.set("no", "on".to_string()).await;
+            session.clear().await;
+            assert_eq!(session.get("no").await, None);
+            let mut other_session = super::Session::from_id(&id).await.unwrap();
+            other_session.set("on", "no".to_string()).await;
+            assert_eq!(session.get("on").await, other_session.get("on").await);
+            assert_eq!(session.get("on").await.unwrap(), "no");
+            assert_eq!(session.unset("on").await.get("on").await, None);
+            session.delete().await;
+            if let Some(_) = super::Session::from_id(&id).await {
+                panic!("Delete failed!");
+            }
+        });
     }
 }
